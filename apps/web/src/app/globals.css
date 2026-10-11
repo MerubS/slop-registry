@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --paper: #f3efe6;
+  --card: #fffdf8;
+  --ink: #1c1712;
+  --muted: #6d6458;
+  --line: #e4d9c6;
+  --rust: #8d3b1d;
+  --rust-dark: #6e2c14;
+  --pine: #1e4a38;
+  --danger-bg: #fde8e2;
+  --danger: #8a2a1c;
+}
+
+body {
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(141, 59, 29, 0.08), transparent 28rem),
+    var(--paper);
+  font-family: var(--font-geist-sans), "Segoe UI", sans-serif;
+}
+
+::selection {
+  background: #f0d2c4;
+}
