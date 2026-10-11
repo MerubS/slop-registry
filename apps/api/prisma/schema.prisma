@@ -1,0 +1,70 @@
+// Day 1 stores review comments. bucket, category, reason, and embedding
+// stay empty until classification and clustering. They are on the model
+// now so a later migration does not rewrite a table we have already filled.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // pgvector's SQL extension is named "vector". Prisma's schema name is pgvector.
+  extensions = [pgvector(map: "vector")]
+}
+
+model Repo {
+  id         String          @id @default(cuid())
+  // "owner/repo", exactly as the request spelled it. GitHub itself is
+  // case-insensitive; this column is not. See the explainer.
+  fullName   String          @unique
+  fetchedAt  DateTime
+  comments   ReviewComment[]
+  invariants Invariant[]
+}
+
+model ReviewComment {
+  // GitHub's comment id. Primary key so a second ingest updates the row
+  // instead of inserting a duplicate. BigInt because the plan asks for it
+  // and because these ids will not fit in a 32-bit int. They still fit in
+  // a JS number today (under 2^53), so the client can pass them safely.
+  id        BigInt   @id
+  repoId    String
+  repo      Repo     @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  prNumber  Int
+  author    String
+  isBot     Boolean
+  path      String?
+  body      String
+  htmlUrl   String
+  createdAt DateTime
+
+  // Filled in later by classification. Null means "not classified".
+  // Re-ingest must not overwrite these. The upsert update clause omits them.
+  bucket   String?
+  category String?
+  reason   String?
+
+  // 1536 is the default size of OpenAI text-embedding-3-small, which the
+  // clustering step will use. Prisma has no vector type, so this column is
+  // Unsupported: the database has it, the Prisma client cannot read or
+  // write it. Clustering will use SQL. Select a specific field list on
+  // writes so Prisma does not try to return this column.
+  embedding Unsupported("vector(1536)")?
+
+  @@index([repoId])
+}
+
+model Invariant {
+  id               String   @id @default(cuid())
+  repoId           String
+  repo             Repo     @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  title            String
+  assertion        String
+  category         String?
+  fileGlob         String?
+  clusterSize      Int      @default(0)
+  sourceCommentIds BigInt[] @default([])
+  createdAt        DateTime @default(now())
+}

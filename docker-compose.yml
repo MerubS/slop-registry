@@ -1,0 +1,25 @@
+# Local Postgres for Slop Registry.
+# Image is Postgres 16 plus the pgvector files. The extension itself is
+# created by the Prisma migration (CREATE EXTENSION vector), not by this file.
+# Host port 54329 avoids a Postgres already bound to 5432.
+# If you change the user, password, or database, change DATABASE_URL to match.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: slop
+      POSTGRES_PASSWORD: slop
+      POSTGRES_DB: slop_registry
+    ports:
+      - "54329:5432"
+    volumes:
+      - slop_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slop -d slop_registry"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  slop_pgdata:

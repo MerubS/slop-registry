@@ -1,0 +1,27 @@
+{
+  "name": "slop-registry",
+  "private": true,
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter web --filter api dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev:api": "pnpm --filter api dev",
+    "test": "pnpm --filter api test",
+    "db:up": "docker compose up -d",
+    "db:migrate": "pnpm --filter api exec prisma migrate deploy",
+    "db:generate": "pnpm --filter api exec prisma generate"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "unrs-resolver",
+      "@parcel/watcher"
+    ]
+  }
+}
