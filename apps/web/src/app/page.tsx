@@ -34,6 +34,8 @@ type InvariantCard = {
   category: string | null;
   fileGlob: string | null;
   clusterSize: number;
+  supportCount?: number;
+  prCount?: number;
   evidence: EvidenceLink[];
 };
 
@@ -250,8 +252,9 @@ export default function HomePage() {
                   <h4 className="font-medium">{invariant.title}</h4>
                   <p className="mt-1 text-sm leading-relaxed">{invariant.assertion}</p>
                   <p className="mt-2 font-mono text-xs text-[var(--muted)]">
-                    {invariant.category ?? "unset"} · {invariant.fileGlob ?? "**"} ·{" "}
-                    {invariant.clusterSize} comments
+                    {invariant.category ?? "unset"} · {invariant.fileGlob ?? "**"} · seen in{" "}
+                    {seenInPullRequests(invariant)} pull requests ·{" "}
+                    {supportingComments(invariant)} supporting comments
                   </p>
                   {invariant.evidence.length > 0 && (
                     <ul className="mt-2 space-y-1 text-sm">
@@ -356,6 +359,15 @@ function BucketTable({ title, counts }: { title: string; counts: BucketCounts })
       </ul>
     </div>
   );
+}
+
+function seenInPullRequests(invariant: InvariantCard): number {
+  if (invariant.prCount) return invariant.prCount;
+  return new Set(invariant.evidence.map((link) => link.prNumber)).size;
+}
+
+function supportingComments(invariant: InvariantCard): number {
+  return invariant.supportCount || invariant.evidence.length || invariant.clusterSize;
 }
 
 function parseRepo(input: string): { owner: string; repo: string } | null {

@@ -12,7 +12,12 @@ export type InvariantView = {
   assertion: string;
   category: string | null;
   fileGlob: string | null;
+  // Supporting comments, not the raw cluster. clusterSize is the same
+  // number, kept so the original column still sorts.
   clusterSize: number;
+  supportCount: number;
+  // Distinct pull requests among the supporting comments.
+  prCount: number;
   sourceCommentIds: string[];
   evidence: EvidenceLink[];
 };
@@ -25,7 +30,7 @@ export async function loadInvariantViews(
 ): Promise<InvariantView[]> {
   const rows = await prisma.invariant.findMany({
     where: { repoId },
-    orderBy: [{ clusterSize: 'desc' }, { id: 'asc' }],
+    orderBy: [{ prCount: 'desc' }, { supportCount: 'desc' }, { id: 'asc' }],
   });
 
   const ids = rows.flatMap((row) => row.sourceCommentIds);
@@ -47,6 +52,8 @@ export async function loadInvariantViews(
     category: row.category,
     fileGlob: row.fileGlob,
     clusterSize: row.clusterSize,
+    supportCount: row.supportCount,
+    prCount: row.prCount,
     sourceCommentIds: row.sourceCommentIds.map((id) => id.toString()),
     evidence: row.sourceCommentIds.flatMap((id) => {
       const comment = byId.get(id.toString());

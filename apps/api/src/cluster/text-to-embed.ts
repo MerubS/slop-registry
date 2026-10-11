@@ -1,30 +1,46 @@
-// Prefix the category and the file path before the comment.
+// Embed the comment, not the path and not the category.
 //
-// The first aviator-co/av run embedded the body alone. Across 169 non-noise
-// comments the maximum pairwise cosine was 0.772, under the old 0.82 gate,
-// so same-rule comments never joined. Leading with the category and the
-// path pulls comments that share a rule and a file area toward each other.
+// Run 2 prefixed every vector with `category:` and `path:`. Short comments
+// were dominated by that prefix, so clusters formed by directory (cmd/av,
+// docs, internal/git) instead of by the rule in the words. The path stays
+// on the row and is used only when suggestFileGlob runs, after verification
+// has dropped comments that do not state the rule.
 //
-// The trade-off is the other error. Two different rules on the same file
-// can land closer because they share the path line, and the same rule on
-// files in different directories can land farther apart. The diff hunk and
-// the thread replies are not in the vector. The path is still used later
-// for the file glob, from the column, not by parsing this string back out.
+// A short excerpt of the changed diff lines can sit after the body. It is
+// capped so it is never longer than the comment. A hunk longer than the
+// comment would do what the path prefix did. Lines that are only a hunk
+// header are left out. An empty comment is not embedded.
 export const EMBED_CHARS = 8000;
+export const HUNK_EMBED_CHARS = 160;
 
 export function textToEmbed(input: {
   body: string;
-  category: string | null;
-  path: string | null;
+  diffHunk: string | null;
 }): string | null {
-  const trimmed = input.body.trim();
-  if (!trimmed) return null;
-  const text = [
-    `category: ${input.category ?? 'unknown'}`,
-    `path: ${input.path ?? '(no file path)'}`,
-    'comment:',
-    trimmed,
-  ].join('\n');
+  const body = input.body.trim();
+  if (!body) return null;
+
+  const excerpt = hunkExcerpt(input.diffHunk, body.length);
+  const text = excerpt ? `${body}\n\ndiff excerpt:\n${excerpt}` : body;
   if (text.length <= EMBED_CHARS) return text;
   return text.slice(0, EMBED_CHARS);
+}
+
+function hunkExcerpt(hunk: string | null, bodyLength: number): string | null {
+  if (!hunk?.trim() || bodyLength <= 0) return null;
+  const changed = hunk
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(
+      (line) =>
+        /^[+-]/.test(line) &&
+        !line.startsWith('+++') &&
+        !line.startsWith('---'),
+    )
+    .join('\n')
+    .trim();
+  if (!changed) return null;
+  const cap = Math.min(HUNK_EMBED_CHARS, bodyLength);
+  if (changed.length <= cap) return changed;
+  return changed.slice(0, cap);
 }

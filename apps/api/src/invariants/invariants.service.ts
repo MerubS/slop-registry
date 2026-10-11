@@ -1,14 +1,16 @@
 import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { ClusterService } from '../cluster/cluster.service';
+import { DEFAULT_CLUSTER_THRESHOLD } from '../cluster/complete-linkage';
 import { suggestFileGlob } from '../cluster/file-glob';
-import { DEFAULT_CLUSTER_THRESHOLD } from '../cluster/greedy-cluster';
 import { PrismaService } from '../prisma/prisma.service';
 import { findRepoOrThrow } from '../repos/find-repo';
 import { InvariantView, loadInvariantViews } from './load-invariants';
 import { OpenAiDrafter } from './openai-drafter';
+import { supportedComments } from './supported-comments';
 
-// The page and the results doc show ten. Smaller clusters are still stored
-// on the cluster response; they just do not get a draft.
+// Verified drafts, not raw clusters. A cluster that fails the support check
+// is skipped and the next cluster is tried, until this many are stored or
+// the list runs out.
 export const DRAFT_LIMIT = 10;
 
 export type DraftResult = {
@@ -16,8 +18,19 @@ export type DraftResult = {
   threshold: number;
   model: string;
   clusterCount: number;
+  // Clusters sent to the model.
+  checked: number;
+  // Clusters that did not keep two supporting comments from two pull requests.
+  discarded: number;
   drafted: number;
   invariants: InvariantView[];
+};
+
+type ClusterComment = {
+  id: bigint;
+  prNumber: number;
+  path: string | null;
+  body: string;
 };
 
 @Injectable()
@@ -36,24 +49,29 @@ export class InvariantsService {
     threshold = DEFAULT_CLUSTER_THRESHOLD,
   ): Promise<DraftResult> {
     const prepared = await this.clusters.prepare(owner, repoName, threshold);
-    const top = prepared.clusters.slice(0, DRAFT_LIMIT);
     const drafts = [];
+    let checked = 0;
+    let discarded = 0;
 
-    for (const cluster of top) {
-      const comments = await this.prisma.reviewComment.findMany({
+    for (const cluster of prepared.clusters) {
+      if (drafts.length >= DRAFT_LIMIT) break;
+
+      const comments = (await this.prisma.reviewComment.findMany({
         where: { id: { in: cluster.commentIds } },
         select: { id: true, prNumber: true, path: true, body: true },
         orderBy: { id: 'asc' },
-      });
-      if (comments.length === 0) continue;
+      })) as ClusterComment[];
+      if (comments.length < 2) {
+        discarded += 1;
+        continue;
+      }
 
-      const fileGlob = suggestFileGlob(comments.map((comment) => comment.path));
-      let drafted;
+      checked += 1;
+      let verdict;
       try {
-        drafted = await this.drafter.draft({
-          fileGlob,
-          clusterSize: cluster.size,
+        verdict = await this.drafter.verifyAndDraft({
           comments: comments.map((comment) => ({
+            id: comment.id.toString(),
             prNumber: comment.prNumber,
             path: comment.path,
             body: comment.body,
@@ -62,19 +80,27 @@ export class InvariantsService {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new BadGatewayException(
-          `Stopped while drafting invariants. ${drafts.length} drafts were built and not saved, so the previous drafts for this repo are unchanged. ${message}`,
+          `Stopped while verifying a cluster. ${drafts.length} drafts were built and not saved, so the previous drafts for this repo are unchanged. ${message}`,
         );
       }
 
+      const kept = supportedComments(comments, verdict.supportingCommentIds);
+      if (!kept || !verdict.title || !verdict.assertion) {
+        discarded += 1;
+        continue;
+      }
+
       drafts.push({
-        title: drafted.title,
-        assertion: drafted.assertion,
-        category: drafted.category,
-        fileGlob,
-        clusterSize: cluster.size,
-        // Evidence is the whole cluster, not only the eight excerpts the
-        // model saw. The links have to point at every comment we grouped.
-        sourceCommentIds: cluster.commentIds,
+        title: verdict.title,
+        assertion: verdict.assertion,
+        category: verdict.category,
+        // Glob comes from the comments that state the rule, not from the
+        // directory the raw cluster happened to share.
+        fileGlob: suggestFileGlob(kept.comments.map((comment) => comment.path)),
+        clusterSize: kept.comments.length,
+        supportCount: kept.comments.length,
+        prCount: kept.prCount,
+        sourceCommentIds: kept.comments.map((comment) => comment.id),
       });
     }
 
@@ -95,6 +121,8 @@ export class InvariantsService {
                 category: draft.category,
                 fileGlob: draft.fileGlob,
                 clusterSize: draft.clusterSize,
+                supportCount: draft.supportCount,
+                prCount: draft.prCount,
                 sourceCommentIds: draft.sourceCommentIds,
               })),
             }),
@@ -103,7 +131,7 @@ export class InvariantsService {
 
     const invariants = await loadInvariantViews(this.prisma, prepared.repoId);
     this.logger.log(
-      `${prepared.fullName}: drafted ${invariants.length} invariants from ${prepared.clusters.length} clusters`,
+      `${prepared.fullName}: drafted ${invariants.length}, discarded ${discarded}, from ${prepared.clusters.length} clusters`,
     );
 
     return {
@@ -111,6 +139,8 @@ export class InvariantsService {
       threshold,
       model: this.drafter.modelName(),
       clusterCount: prepared.clusters.length,
+      checked,
+      discarded,
       drafted: invariants.length,
       invariants,
     };

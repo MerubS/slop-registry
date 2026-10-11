@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { DEFAULT_CLUSTER_THRESHOLD } from '../cluster/greedy-cluster';
+import { DEFAULT_CLUSTER_THRESHOLD } from '../cluster/complete-linkage';
 
 // GitHub owner and repo names are letters, numbers, dots, underscores, hyphens.
 // Rejecting anything else keeps a bad param out of the URL we send GitHub.

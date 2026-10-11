@@ -51,7 +51,7 @@ It also reads the classifications and the two exports, then writes [docs/day2-re
 
 Optional environment variables for that script: `API_URL` (default `http://127.0.0.1:43124`), `PIPELINE_LIMIT` (default `500`), `PIPELINE_THRESHOLD` (default `0.6`), `PIPELINE_INCLUDE_BOTS=true`.
 
-Restart `pnpm dev` after pulling this code so the API process is the new one. If this database already has labels from an earlier run, apply the thread migration before the pipeline. It adds `inReplyToId` and `diffHunk`, and it clears `bucket`, `category`, `reason`, and `embedding` once so the new prompt and the prefixed embeddings actually run. Ingest still does not clear those columns after that. The script ingests first, which fills `in_reply_to_id` before classify.
+Restart `pnpm dev` after pulling this code so the API process is the new one. `pnpm db:migrate` applies the thread columns and, in a later migration, clears embeddings only. Run 2 labels stay, so classify is a cache read. The cleared vectors are rebuilt from the comment body. Ingest still does not clear labels or embeddings after that.
 
 ```bash
 pnpm db:migrate
@@ -78,9 +78,9 @@ Summary returns the day-1 counts (`total`, `human`, `bot`, `botShare`, top autho
 
 Classify labels top-level comments whose `bucket` is still null. A top-level comment has no `in_reply_to_id`. Replies are context for that comment, along with the diff hunk, and they are not labeled. The response includes `skippedReplies`. Human comments only, unless you pass `includeBots=true`. A comment that already has a bucket is not sent to the model again. Each label has a bucket (`deterministic`, `execution_testable`, `judgment`, `noise`), one of Verify's nine categories, and a reason of 20 words or fewer. Noise is only "LGTM", thanks, an acknowledgement, or a pure typo fix. A concrete suggestion is classified as the rule that change implies. The chat model is `OPENAI_MODEL`, default `gpt-4o-mini`, temperature 0. Requests run `CLASSIFY_CONCURRENCY` at a time (default 4) and retry on HTTP 429.
 
-Cluster embeds top-level non-noise comments with `text-embedding-3-small` into the pgvector column. The embedded text is prefixed with the category and the file path. It then groups them by cosine similarity at or above `threshold` (default 0.6, still overridable). A cluster is kept when it has at least two comments from at least two pull requests. The response includes `similarity`: max, median, and how many cross-PR pairs sit at or above 0.6, 0.7, and 0.8. Comments that already have an embedding are not embedded again.
+Cluster embeds top-level non-noise comments with `text-embedding-3-small` into the pgvector column. The embedded text is the comment body, plus a short excerpt of the changed diff lines that is never longer than the comment. The path is not in the vector. Grouping is complete linkage: every pair in a cluster is at or above `threshold` (default 0.6, still overridable). A cluster is kept when it has at least two comments from at least two pull requests. The response includes `similarity`: max, median, and how many cross-PR pairs sit at or above 0.6, 0.7, and 0.8. Comments that already have an embedding are not embedded again.
 
-Invariants drafts the top 10 clusters. Each draft has a title, a one-sentence assertion, a category, a `fileGlob` chosen from the comment paths, a `clusterSize`, and `sourceCommentIds`. Running it again replaces this repo's drafts instead of appending a second copy.
+Invariants asks the model which comments in a cluster state the same specific rule, drops the rest, and drafts only when two supporting comments from two pull requests remain. The file glob and the evidence links use those supporting comments. `supportCount` is how many comments state the rule. `prCount` is how many pull requests they span ("seen in N pull requests"). At most 10 verified drafts are stored. Running it again replaces this repo's drafts instead of appending a second copy.
 
 ## Tests
 
@@ -121,4 +121,4 @@ docs/day1-results.md Measured aviator-co/av ingest.
 
 ## Limits
 
-The GitHub endpoint used here is diff review comments, not the review summary body and not issue comments. Public repos only. Labels are a model's judgment at temperature 0, cached on the row. Thread replies are not classified. The cluster threshold 0.6 is the default after the first measured run came back with zero clusters at 0.82. It is still a choice you can change, and the similarity distribution on the cluster response is how you explain it. Drafts are not active Verify rules. Details are in the explainer.
+The GitHub endpoint used here is diff review comments, not the review summary body and not issue comments. Public repos only. Labels are a model's judgment at temperature 0, cached on the row. Thread replies are not classified. Clusters require every pair to meet the threshold, and a draft is kept only when the model can point at two comments from two pull requests that state that rule. Drafts are not active Verify rules. Details are in the explainer.

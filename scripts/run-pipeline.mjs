@@ -307,7 +307,7 @@ function render(input) {
   lines.push('## Draft invariants');
   lines.push('');
   lines.push(
-    `Drafted ${input.invariantsBody.drafted} of ${input.invariantsBody.clusterCount} clusters (at most 10). Model \`${input.invariantsBody.model}\`.`,
+    `Drafted ${input.invariantsBody.drafted} verified rules from ${input.invariantsBody.clusterCount} clusters. Checked ${input.invariantsBody.checked ?? 'n/a'}, discarded ${input.invariantsBody.discarded ?? 'n/a'} that did not keep two supporting comments from two pull requests. At most 10 are stored. Model \`${input.invariantsBody.model}\`.`,
   );
   lines.push('');
   const drafted = input.invariantsBody.invariants || [];
@@ -320,7 +320,12 @@ function render(input) {
       lines.push('');
       lines.push(`- Category: \`${invariant.category}\``);
       lines.push(`- File glob: \`${invariant.fileGlob}\``);
-      lines.push(`- Cluster size: ${invariant.clusterSize}`);
+      lines.push(
+        `- Supporting comments: ${invariant.supportCount ?? invariant.clusterSize}`,
+      );
+      lines.push(
+        `- Seen in pull requests: ${invariant.prCount ?? 'n/a'}`,
+      );
       lines.push(`- Assertion: ${invariant.assertion}`);
       lines.push('- Evidence:');
       if (!invariant.evidence || invariant.evidence.length === 0) {

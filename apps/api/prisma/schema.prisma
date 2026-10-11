@@ -47,9 +47,9 @@ model ReviewComment {
   // they are left out of the bucket split.
   inReplyToId BigInt?
 
-  // The diff the comment is attached to. Classify passes it with the
-  // thread so a suggestion is judged against the code it replaces.
-  // The embedding does not include it.
+  // The diff the comment is attached to. Classify passes the hunk with
+  // the thread. The embedding may include a short excerpt of the changed
+  // lines, never the path. The path is only for the file glob.
   diffHunk String? @db.Text
 
   // Null bucket means "not classified". Classify skips a row that already
@@ -77,7 +77,13 @@ model Invariant {
   assertion        String
   category         String?
   fileGlob         String?
+  // Supporting comments that state the rule, not the raw cluster size.
+  // supportCount is the same number under an honest name.
   clusterSize      Int      @default(0)
+  supportCount     Int      @default(0)
+  // Distinct pull requests among those supporting comments. This is the
+  // "seen in N pull requests" figure. It is not the raw cluster's PR count.
+  prCount          Int      @default(0)
   sourceCommentIds BigInt[] @default([])
   createdAt        DateTime @default(now())
 }

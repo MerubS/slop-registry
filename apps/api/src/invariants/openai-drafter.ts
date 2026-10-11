@@ -3,14 +3,16 @@ import { z } from 'zod';
 import { CATEGORIES } from '../classify/labels';
 import { openAiModelName } from '../classify/model-name';
 import { retryOnRateLimit } from '../classify/rate-limit-retry';
-import { InvariantDraft, draftPrompt, parseDraft } from './draft';
+import {
+  DRAFT_SYSTEM_PROMPT,
+  VerifiedDraft,
+  draftPrompt,
+  parseVerifiedDraft,
+} from './draft';
 
 type StructuredModel = {
   invoke: (input: [string, string][]) => Promise<unknown>;
 };
-
-const DRAFT_SYSTEM_PROMPT =
-  'You draft one software-team invariant from recurring pull-request review comments. State the rule. Do not describe the current implementation.';
 
 @Injectable()
 export class OpenAiDrafter {
@@ -21,18 +23,21 @@ export class OpenAiDrafter {
     return openAiModelName();
   }
 
-  async draft(input: {
-    fileGlob: string;
-    clusterSize: number;
-    comments: Array<{ prNumber: number; path: string | null; body: string }>;
-  }): Promise<InvariantDraft> {
+  async verifyAndDraft(input: {
+    comments: Array<{
+      id: string;
+      prNumber: number;
+      path: string | null;
+      body: string;
+    }>;
+  }): Promise<VerifiedDraft> {
     const structured = await this.ensureModel();
     return retryOnRateLimit(async () => {
       const raw = await structured.invoke([
         ['system', DRAFT_SYSTEM_PROMPT],
         ['human', draftPrompt(input)],
       ]);
-      return parseDraft(raw);
+      return parseVerifiedDraft(raw);
     });
   }
 
@@ -54,6 +59,7 @@ export class OpenAiDrafter {
     });
     this.structured = model.withStructuredOutput(
       z.object({
+        supportingCommentIds: z.array(z.string()),
         title: z.string(),
         assertion: z.string(),
         category: z.enum(CATEGORIES),

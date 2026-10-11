@@ -5,8 +5,8 @@ import {
   ClusterItem,
   CommentCluster,
   DEFAULT_CLUSTER_THRESHOLD,
-  greedyClusters,
-} from './greedy-cluster';
+  completeLinkageClusters,
+} from './complete-linkage';
 import { OpenAiEmbedder } from './openai-embedder';
 import { SimilarityDistribution, similarityDistribution } from './similarity';
 import { textToEmbed } from './text-to-embed';
@@ -54,8 +54,7 @@ export type PreparedClusters = {
 type PendingRow = {
   id: bigint;
   body: string;
-  category: string | null;
-  path: string | null;
+  diffHunk: string | null;
 };
 type EmbeddedRow = {
   id: bigint;
@@ -147,7 +146,7 @@ export class ClusterService {
       });
     }
 
-    const clusters = greedyClusters(items, threshold);
+    const clusters = completeLinkageClusters(items, threshold);
     const similarity = similarityDistribution(items);
     this.logger.log(
       `${repo.fullName}: embedded ${embedded.embeddedThisRun} this run, ${clusters.length} clusters at ${threshold}, max cosine ${similarity.max}`,
@@ -186,7 +185,7 @@ export class ClusterService {
     skippedEmptyBody: number;
   }> {
     const pending = await this.prisma.$queryRaw<PendingRow[]>`
-      SELECT id, body, category, path
+      SELECT id, body, "diffHunk"
       FROM "ReviewComment"
       WHERE "repoId" = ${repoId}
         AND "inReplyToId" IS NULL
@@ -201,8 +200,7 @@ export class ClusterService {
     for (const row of pending) {
       const text = textToEmbed({
         body: row.body,
-        category: row.category,
-        path: row.path,
+        diffHunk: row.diffHunk,
       });
       if (!text) {
         skippedEmptyBody += 1;

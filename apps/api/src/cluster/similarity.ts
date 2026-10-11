@@ -1,4 +1,4 @@
-import { cosineSimilarity } from './greedy-cluster';
+import { cosineSimilarity } from './complete-linkage';
 
 // Cutoffs reported on every cluster response. A pair at 0.85 counts in
 // all three, so the gaps between them are readable without another pass.

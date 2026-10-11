@@ -1,4 +1,4 @@
-import { cosineSimilarity } from './greedy-cluster';
+import { cosineSimilarity } from './complete-linkage';
 import { similarityDistribution } from './similarity';
 
 describe('similarityDistribution', () => {

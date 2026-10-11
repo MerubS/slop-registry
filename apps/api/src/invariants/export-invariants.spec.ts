@@ -11,6 +11,8 @@ const sample: InvariantView = {
   category: 'functional_correctness',
   fileGlob: 'pkg/**/*.go',
   clusterSize: 2,
+  supportCount: 2,
+  prCount: 2,
   sourceCommentIds: ['11', '22'],
   evidence: [
     {
@@ -35,6 +37,8 @@ describe('invariant exports', () => {
       'url: "https://github.com/aviator-co/av/pull/4#discussion_r11"',
     );
     expect(yaml).toContain('cluster_size: 2');
+    expect(yaml).toContain('support_count: 2');
+    expect(yaml).toContain('pr_count: 2');
   });
 
   it('links each source comment in the markdown', () => {
@@ -42,7 +46,7 @@ describe('invariant exports', () => {
     expect(markdown).toContain(
       '[Comment 11](https://github.com/aviator-co/av/pull/4#discussion_r11)',
     );
-    expect(markdown).toContain('across 2 pull requests');
+    expect(markdown).toContain('Seen in 2 pull requests');
     expect(markdown).toContain('`pkg/**/*.go`');
   });
 });

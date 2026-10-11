@@ -25,6 +25,8 @@ export function renderInvariantsYaml(
     lines.push(`    category: ${yamlQuote(invariant.category ?? '')}`);
     lines.push(`    file_path_glob: ${yamlQuote(invariant.fileGlob ?? '**')}`);
     lines.push(`    cluster_size: ${invariant.clusterSize}`);
+    lines.push(`    support_count: ${invariant.supportCount}`);
+    lines.push(`    pr_count: ${invariant.prCount}`);
     lines.push('    source_comment_ids:');
     if (invariant.sourceCommentIds.length === 0) {
       lines.push('      []');
@@ -66,9 +68,9 @@ export function renderInvariantsMarkdown(
   }
 
   invariants.forEach((invariant, index) => {
-    const pullRequests = new Set(
-      invariant.evidence.map((link) => link.prNumber),
-    );
+    const seenIn =
+      invariant.prCount ||
+      new Set(invariant.evidence.map((link) => link.prNumber)).size;
     lines.push(`## ${index + 1}. ${invariant.title}`);
     lines.push('');
     lines.push(`**Category:** ${invariant.category ?? 'unset'}`);
@@ -76,7 +78,7 @@ export function renderInvariantsMarkdown(
     lines.push(`**File glob:** \`${invariant.fileGlob ?? '**'}\``);
     lines.push('');
     lines.push(
-      `**Cluster:** ${invariant.clusterSize} comments across ${pullRequests.size} pull requests`,
+      `**Seen in ${seenIn} pull requests.** ${invariant.supportCount || invariant.clusterSize} comments state this rule.`,
     );
     lines.push('');
     lines.push(`> ${invariant.assertion.replace(/\s+/g, ' ')}`);
