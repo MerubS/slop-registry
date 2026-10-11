@@ -42,22 +42,29 @@ pnpm run:pipeline aviator-co/av
 That one command calls, in order:
 
 1. `POST /repos/aviator-co/av/ingest?limit=500`
-2. `POST /repos/aviator-co/av/classify` (human comments only)
-3. `POST /repos/aviator-co/av/cluster?threshold=0.82`
-4. `POST /repos/aviator-co/av/invariants?threshold=0.82`
+2. `POST /repos/aviator-co/av/classify` (top-level human comments only)
+3. `POST /repos/aviator-co/av/cluster?threshold=0.6`
+4. `POST /repos/aviator-co/av/invariants?threshold=0.6`
 5. `GET /repos/aviator-co/av/summary`
 
 It also reads the classifications and the two exports, then writes [docs/day2-results.md](docs/day2-results.md). The script talks only to the local API. It does not read the OpenAI key. If a step fails, it prints the error and does not write the file.
 
-Optional environment variables for that script: `API_URL` (default `http://127.0.0.1:43124`), `PIPELINE_LIMIT` (default `500`), `PIPELINE_THRESHOLD` (default `0.82`), `PIPELINE_INCLUDE_BOTS=true`.
+Optional environment variables for that script: `API_URL` (default `http://127.0.0.1:43124`), `PIPELINE_LIMIT` (default `500`), `PIPELINE_THRESHOLD` (default `0.6`), `PIPELINE_INCLUDE_BOTS=true`.
+
+Restart `pnpm dev` after pulling this code so the API process is the new one. If this database already has labels from an earlier run, apply the thread migration before the pipeline. It adds `inReplyToId` and `diffHunk`, and it clears `bucket`, `category`, `reason`, and `embedding` once so the new prompt and the prefixed embeddings actually run. Ingest still does not clear those columns after that. The script ingests first, which fills `in_reply_to_id` before classify.
+
+```bash
+pnpm db:migrate
+pnpm run:pipeline aviator-co/av
+```
 
 ## Call the API directly
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:43124/repos/aviator-co/av/ingest?limit=500"
 curl -sS -X POST "http://127.0.0.1:43124/repos/aviator-co/av/classify"
-curl -sS -X POST "http://127.0.0.1:43124/repos/aviator-co/av/cluster?threshold=0.82"
-curl -sS -X POST "http://127.0.0.1:43124/repos/aviator-co/av/invariants?threshold=0.82"
+curl -sS -X POST "http://127.0.0.1:43124/repos/aviator-co/av/cluster?threshold=0.6"
+curl -sS -X POST "http://127.0.0.1:43124/repos/aviator-co/av/invariants?threshold=0.6"
 curl -sS "http://127.0.0.1:43124/repos/aviator-co/av/summary"
 curl -sS "http://127.0.0.1:43124/repos/aviator-co/av/invariants.yaml"
 curl -sS "http://127.0.0.1:43124/repos/aviator-co/av/invariants.md"
@@ -65,13 +72,13 @@ curl -sS "http://127.0.0.1:43124/repos/aviator-co/av/invariants.md"
 
 Ingest returns `{ fullName, requested, received, totalStored }`. `received` is how many comments this call got from GitHub, after the limit. `totalStored` is how many rows Postgres has for that repo after the upsert. A second call with the same comments should leave `totalStored` unchanged.
 
-Summary returns the day-1 counts (`total`, `human`, `bot`, `botShare`, top authors) plus `buckets.human`, `buckets.all`, and `invariants` with evidence URLs. `botShare` is a fraction from 0 to 1. The top lists are at most 10 logins. If this repo has never been ingested, summary returns 404.
+Summary returns the day-1 counts (`total`, `human`, `bot`, `botShare`, top authors) plus `buckets.human`, `buckets.all`, `repliesExcluded`, and `invariants` with evidence URLs. `total`, `human`, and `bot` count every stored comment. The bucket split does not: thread replies are reported in `repliesExcluded` (`human` and `all`) and left out of the buckets. `botShare` is a fraction from 0 to 1. The top lists are at most 10 logins. If this repo has never been ingested, summary returns 404.
 
 `limit` defaults to 500 and must be from 1 to 2000. GitHub is asked for 100 comments per page, newest first (`sort=created&direction=desc`).
 
-Classify labels comments whose `bucket` is still null. Human comments only, unless you pass `includeBots=true`. A comment that already has a bucket is not sent to the model again. Each label has a bucket (`deterministic`, `execution_testable`, `judgment`, `noise`), one of Verify's nine categories, and a reason of 20 words or fewer. The chat model is `OPENAI_MODEL`, default `gpt-4o-mini`, temperature 0. Requests run `CLASSIFY_CONCURRENCY` at a time (default 4) and retry on HTTP 429.
+Classify labels top-level comments whose `bucket` is still null. A top-level comment has no `in_reply_to_id`. Replies are context for that comment, along with the diff hunk, and they are not labeled. The response includes `skippedReplies`. Human comments only, unless you pass `includeBots=true`. A comment that already has a bucket is not sent to the model again. Each label has a bucket (`deterministic`, `execution_testable`, `judgment`, `noise`), one of Verify's nine categories, and a reason of 20 words or fewer. Noise is only "LGTM", thanks, an acknowledgement, or a pure typo fix. A concrete suggestion is classified as the rule that change implies. The chat model is `OPENAI_MODEL`, default `gpt-4o-mini`, temperature 0. Requests run `CLASSIFY_CONCURRENCY` at a time (default 4) and retry on HTTP 429.
 
-Cluster embeds non-noise comments with `text-embedding-3-small` into the pgvector column, then groups them by cosine similarity at or above `threshold` (default 0.82). A cluster is kept when it has at least two comments from at least two pull requests. Comments that already have an embedding are not embedded again.
+Cluster embeds top-level non-noise comments with `text-embedding-3-small` into the pgvector column. The embedded text is prefixed with the category and the file path. It then groups them by cosine similarity at or above `threshold` (default 0.6, still overridable). A cluster is kept when it has at least two comments from at least two pull requests. The response includes `similarity`: max, median, and how many cross-PR pairs sit at or above 0.6, 0.7, and 0.8. Comments that already have an embedding are not embedded again.
 
 Invariants drafts the top 10 clusters. Each draft has a title, a one-sentence assertion, a category, a `fileGlob` chosen from the comment paths, a `clusterSize`, and `sourceCommentIds`. Running it again replaces this repo's drafts instead of appending a second copy.
 
@@ -105,7 +112,7 @@ Do not commit a real token or API key. `.env` is gitignored.
 ```text
 apps/web          Next.js 14 page. One form, then the summary.
 apps/api          NestJS API. Ingest, classify, cluster, invariants, summary.
-apps/api/prisma   Schema and the init migration (pgvector included).
+apps/api/prisma   Schema, the init migration (pgvector), and the thread migration.
 docker-compose.yml   Postgres 16 with pgvector, host port 54329.
 scripts/run-pipeline.mjs   Writes docs/day2-results.md from a live API run.
 docs/EXPLAINER.md    Walkthrough, decisions, interview questions.
@@ -114,4 +121,4 @@ docs/day1-results.md Measured aviator-co/av ingest.
 
 ## Limits
 
-The GitHub endpoint used here is diff review comments, not the review summary body and not issue comments. Public repos only. Labels are a model's judgment at temperature 0, cached on the row. The cluster threshold 0.82 is a starting point, not a tuned result. Drafts are not active Verify rules. Details are in the explainer.
+The GitHub endpoint used here is diff review comments, not the review summary body and not issue comments. Public repos only. Labels are a model's judgment at temperature 0, cached on the row. Thread replies are not classified. The cluster threshold 0.6 is the default after the first measured run came back with zero clusters at 0.82. It is still a choice you can change, and the similarity distribution on the cluster response is how you explain it. Drafts are not active Verify rules. Details are in the explainer.

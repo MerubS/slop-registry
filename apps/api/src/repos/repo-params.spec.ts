@@ -49,8 +49,8 @@ describe('parseIncludeBots', () => {
 });
 
 describe('parseThreshold', () => {
-  it('defaults to 0.82 and accepts a number from 0 to 1', () => {
-    expect(parseThreshold(undefined)).toBe(0.82);
+  it('defaults to 0.6 and accepts a number from 0 to 1', () => {
+    expect(parseThreshold(undefined)).toBe(0.6);
     expect(parseThreshold('0.82')).toBe(0.82);
     expect(parseThreshold('0')).toBe(0);
     expect(parseThreshold('1')).toBe(1);

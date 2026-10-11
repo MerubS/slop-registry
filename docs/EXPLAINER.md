@@ -198,7 +198,7 @@ It is not every kind of review feedback. Review bodies and issue comments are no
 
 31% bot (`botShare` 0.31) is the window. The five newest comments are 4 bots and `jainankit`. Quoting only the tail overstates the bots. Quoting only 0.31 hides that the latest comments are bot-heavy, and that 151 of 155 bot comments are one login, `gemini-code-assist[bot]`.
 
-The day-1 summary is not classified as deterministic, execution-testable, or judgment. A bot share is not Ankit's 45/30/25 split. Day 2 classifies the human comments. Those counts belong in `docs/day2-results.md` after a real run, and that file is not in the repo until the pipeline has been run with a key.
+The day-1 summary is not classified as deterministic, execution-testable, or judgment. A bot share is not Ankit's 45/30/25 split. The first classification run is in the day 2 section below, including the reply and suggestion problems that run exposed. A new `docs/day2-results.md` is still only written by the pipeline script, and that file is not in the repo until the pipeline has been run with a key.
 
 `topHumanAuthors` stops at 10. `Chafid` also has 3 comments and is not listed, because of the tie-break.
 
@@ -212,18 +212,26 @@ Day 2 is four steps after ingest. The page button still only ingests. The pipeli
 
 ### Classification
 
-`POST /repos/:owner/:repo/classify` loads comments whose `bucket` is null. Bots are skipped unless the query is `includeBots=true`. Each remaining comment is one chat request.
+`POST /repos/:owner/:repo/classify` loads the repo's comments and sends only the top-level ones whose `bucket` is null. A top-level comment has `inReplyToId` null. That column is GitHub's `in_reply_to_id`. A reply points at its parent, and a reply to a reply points at that reply. Those are not review feedback.
 
-The request uses LangChain's `ChatOpenAI` with `withStructuredOutput` and a Zod schema. The schema's fields are the bucket, one of Verify's nine categories, and a reason. Temperature is 0. The model name is `OPENAI_MODEL`, and if that variable is empty the code uses `gpt-4o-mini`.
+The first run on `aviator-co/av` (`gpt-4o-mini`) classified every stored human comment as if it stood alone. PR authors answering "already handled", or "`Close()` checks nil itself now", were counted as their own comments. That inflated noise and put a deterministic label on lines that were only a reply. The classifier still sees the thread. `repliesFor` walks `in_reply_to_id` up to the root and passes those bodies, plus the comment's `diff_hunk`, as context. The prompt says the thing to label is the top-level comment. A reply that says the note was handled does not turn the review into noise. A reply whose parent is outside this window stays excluded, and it is not attached to a different comment.
+
+Bots are skipped unless the query is `includeBots=true`. The classify response includes `skippedReplies`, the replies that matched that same bot filter and were not sent. Summary's bucket split is also top-level only. `repliesExcluded.human` and `repliesExcluded.all` are how many replies were left out. `total`, `human`, and `bot` still count every stored comment, the same as day 1. I have not counted how many of the 345 human comments were replies. That number is `repliesExcluded.human` on the next run.
+
+Each remaining top-level comment is one chat request. The request uses LangChain's `ChatOpenAI` with `withStructuredOutput` and a Zod schema. The schema's fields are the bucket, one of Verify's nine categories, and a reason. Temperature is 0. The model name is `OPENAI_MODEL`, and if that variable is empty the code uses `gpt-4o-mini`.
 
 The system prompt states the four buckets in words, not just as enum names:
 
 - **deterministic**: a static rule, an AST check, or a linter could catch it without running the code.
 - **execution_testable**: running the code or a test could catch it.
 - **judgment**: a design or trade-off call that a rule or a test does not settle.
-- **noise**: LGTM, thanks, a typo-only nit, or a question with no rule in it.
+- **noise**: only "LGTM", thanks, an acknowledgement, or a pure typo fix.
 
 Noise is not part of Ankit's 45/30/25. It is called out so those comments do not get forced into a real bucket and then clustered into a fake rule.
+
+The first prompt was looser. It called noise "LGTM, thanks, a typo-only nit, or a question that does not state a rule." On that run, 22 of the 30 human comments that contained a suggestion block were labeled noise. A suggestion block, a rewritten line, or "use X instead of Y" is now the rule that change implies: deterministic if a linter or an AST could enforce it, execution_testable if you would have to run the code, judgment if it is a design preference. A suggestion that only fixes a typo is still noise. The diff hunk is in the prompt so the model can see the code the suggestion replaces. I have not remeasured that 22 after the prompt change.
+
+The first run labeled 345 human comments as deterministic 12, execution_testable 7, judgment 150, and noise 176. Those counts include the replies and the suggestion blocks above. They are that run. They are not a claim about the labels this prompt will produce.
 
 The schema rejects a reason of more than 20 words. The JSON schema sent to the API cannot express "20 words", so the prompt asks for the cap, and `parseClassification` cuts a longer reason down to 20 words before saving. The stored row still has to pass the strict schema. An unknown bucket or category is a failed comment, not a clamped one. There is no honest default for a bucket the model did not pick.
 
@@ -233,13 +241,19 @@ Calls run in a pool. `CLASSIFY_CONCURRENCY` defaults to 4, so four comments are 
 
 Temperature 0 tells the API to take the most likely next token instead of sampling. That removes the usual jitter, where the same prompt comes back slightly different because a random number was involved. It is not a hash. A model update, a prompt edit, or a change on the provider's side can still move a label. I would not tell Aviator that temperature 0 makes the first run bitwise stable forever.
 
-The cache is the part that is exact. The label is stored on the comment row. The next classify selects `bucket IS NULL` only. A comment that already has a bucket is never sent again, so a second run returns the same labels because it does not ask. Ingest's update clause still omits `bucket`, `category`, `reason`, and `embedding`, so refreshing the body from GitHub does not wipe the label either.
+The cache is the part that is exact. The label is stored on the comment row. The next classify selects top-level rows with `bucket IS NULL` only. A comment that already has a bucket is never sent again, so a second run returns the same labels because it does not ask. Ingest's update clause still omits `bucket`, `category`, `reason`, and `embedding`, so refreshing the body from GitHub does not wipe the label either.
+
+The first run's labels and embeddings were produced by the old prompt and by embedding the body alone. The migration `20261011030000_comment_threads` adds `inReplyToId` and `diffHunk`, and it sets those four columns back to null once. That is the "clear the columns on purpose" step. Ingest after that still does not clear them. Run `pnpm db:migrate`, restart the API, then the pipeline. The script ingests first, which fills `in_reply_to_id` before classify. Classifying before that re-ingest would treat every row as top-level, because `inReplyToId` is still null until GitHub is read again.
 
 Those two together are the claim: the first pass is as stable as the model is at temperature 0, and every pass after that is a database read. Embeddings work the same way. A comment that already has a vector is not embedded again. Draft text is the exception. Invariants are deleted and rewritten on each draft run, because the sentence is what a person will edit, and caching a paragraph that the prompt might improve would hide that. Up to ten draft calls can still move even when the clusters did not.
 
 ### Embeddings
 
-Non-noise comments are embedded with `text-embedding-3-small`. The vector is 1536 numbers, which is the width of the column from the day-1 migration. The text we embed is the comment body, truncated at 8000 characters. The path is not in the vector. Two people leaving the same rule on different files should land near each other. The path is used later, for the glob.
+Top-level non-noise comments are embedded with `text-embedding-3-small`. The vector is 1536 numbers, which is the width of the column from the day-1 migration. Replies are not embedded.
+
+The text we embed is prefixed with the category and the file path, then the comment, truncated at 8000 characters. The first run embedded the body alone. Across 169 non-noise comments the maximum pairwise cosine was 0.772 and the median was 0.266, so comments that state the same rule did not land close enough for a gate of 0.82. Leading with the category and the path pulls comments that share a rule and a file area toward each other.
+
+The trade-off is the opposite error. Two different rules on the same file can look closer than they are, because they share the path line. The same rule left on files in different directories can look farther apart. I would rather have that bias, and read the pairs, than a ceiling of 0.772 that keeps every cluster empty. The diff hunk and the thread replies are not in the vector. The path is still used later for the glob, from the column. I have not measured the new maximum.
 
 Prisma still cannot write an `Unsupported` vector. `ClusterService` runs `UPDATE "ReviewComment" SET embedding = $1::vector`. The value is a bracketed list of finite numbers, built in `toVectorLiteral`, then bound as a parameter. It is not string-concatenated from the comment body. Empty bodies are skipped and stay without a vector, so they cannot form a cluster. Batches are 64 texts. A 429 retries that batch. Rows from a batch that already succeeded stay written.
 
@@ -249,9 +263,9 @@ Cosine similarity is the dot product divided by the two lengths. OpenAI's embedd
 
 Greedy clustering walks comments in GitHub id order. The first comment that is not yet used becomes the seed. Every later unused comment with cosine similarity greater than or equal to the threshold joins that seed. They are compared with the seed, not with each other. A comment close to a member but far from the seed stays out. Id order makes the result stable: the same vectors produce the same groups, because the seed is always the earliest id.
 
-The default threshold is 0.82. I picked it as a high bar, not as a number I fit on `aviator-co/av`. This checkout does not call the model, so I have not measured the right cutoff on that repo. 0.82 is high enough that "this SQL runs inside a loop" and "this nil check is missing" should not join just because both are complaints. It is low enough that a rephrased copy of the same rule still has a chance.
+The first run used 0.82 and kept 0 clusters. The maximum pairwise cosine on those 169 non-noise comments was 0.772, so the gate was above every pair. Among cross-PR pairs, 1 scored at least 0.70 and 6 scored at least 0.60. The median over all pairs was 0.266. The default is now 0.6. It is still the `threshold` query parameter, and `PIPELINE_THRESHOLD` overrides what the pipeline sends. 0.6 is the cutoff where that run had a handful of cross-PR pairs to look at. It will also join comments that only share a short phrase. That is the trade for having any clusters at all with `text-embedding-3-small` on these short comments.
 
-How I would tune it, once a real run exists: take about 30 pairs that landed just above 0.82 and 30 that landed just below. Read them. Count same-rule pairs that missed, and different-rule pairs that joined. If the drafts are full of merged topics, raise the threshold (try 0.88, then 0.90). If obvious repeats are split across drafts, lower it (try 0.78, then 0.75). For a preview an admin has to read, I would rather miss a cluster than glue two rules together. Duplicate drafts waste the reader's trust. The query parameter is `threshold`, and the pipeline script sends `0.82` unless `PIPELINE_THRESHOLD` is set.
+I am not calling 0.6 a fitted constant for the next run. The cluster response includes `similarity`: the max and the median over every pair of comments considered (same pull request included), and the count of cross-PR pairs at or above 0.6, 0.7, and 0.8. A pair at 0.85 counts in all three. Fewer than two comments leaves max and median null. Read that object on the run you are defending. If the drafts glue different rules together, raise the threshold. If the same rule is still split, lower it. For a preview an admin has to read, I would rather miss a cluster than glue two rules together, but a threshold above the measured maximum keeps nothing, which is an empty preview.
 
 A kept cluster needs two more filters after similarity. At least two comments, and at least two distinct pull-request numbers. Five copies of one note on a single PR are one review thread. Aviator's docs say the invariants worth writing were left more than twice. Two different PRs is the smallest reading of "recurring" that I can check without a time window. The cluster response reports how many groups survived. The draft step only takes the largest 10, ties broken by more pull requests, then by the smallest comment id.
 
@@ -272,7 +286,7 @@ A leading `./` or a backslash is normalized first. This is a prefix. It is wrong
 
 For each of the top 10 clusters, one more temperature-0 call writes a title, one sentence, and a category. The prompt says to state the rule and not the implementation, with Aviator's own contrast: "All migrations must declare a down block" is a rule, and "Call Down() in src/migrate/migrate.go" is an implementation. The model sees at most eight comment excerpts. `sourceCommentIds` still lists the whole cluster, and the summary joins those ids to `htmlUrl` for the evidence links. YAML and Markdown exports are `GET /repos/:owner/:repo/invariants.yaml` and `invariants.md`. Strings in the YAML are quoted, so a title with a colon or a quote does not break the document.
 
-Summary's new fields are `buckets.human`, `buckets.all` (each has the four buckets plus `unlabeled`), and `invariants` with those evidence URLs. Human counts ignore bots. The pipeline script turns the human counts into percentages. The three benchmark percentages use human comments that are not noise as the denominator, so they sit next to 45/30/25. Noise is reported on its own row.
+Summary's bucket fields are `buckets.human` and `buckets.all` for top-level comments (each has the four buckets plus `unlabeled`), `repliesExcluded` (`human` and `all`) for the replies left out of that split, and `invariants` with those evidence URLs. `human` and `bot` at the top of the summary still count replies, because those are the day-1 totals. The pipeline script turns the top-level human counts into percentages. The denominator is the sum of those bucket counts, not the day-1 human total. The three benchmark percentages use top-level human comments that are not noise, so they sit next to 45/30/25. Noise is reported on its own row. The script also prints `repliesExcluded` and the similarity distribution from the cluster response.
 
 ### A way to estimate the cost before you run it
 
@@ -283,7 +297,7 @@ List prices from OpenAI's pricing page, checked 2026-10-11: `gpt-4o-mini` is $0.
 For each kind of call, estimate tokens, then multiply.
 
 1. Classification input tokens are about the system prompt plus the comment, divided by 4 characters per token for English. Output is the small JSON label. Call that roughly 40 tokens if you have not measured it. Cost is `comments × (input tokens × 0.15 + output tokens × 0.60) / 1_000_000`.
-2. Embedding input tokens are the comment body, again about 4 characters per token, times $0.02 per million. Noise is not embedded. There is no output-token charge.
+2. Embedding input tokens are the prefixed text (category, path, and comment body), again about 4 characters per token, times $0.02 per million. Noise is not embedded, and neither are thread replies. There is no output-token charge.
 3. Drafts are at most 10 calls. Input is the draft prompt plus up to eight excerpts. Output is a title and one sentence.
 
 Worked example, using the day-1 human count of 345 as the multiplier and assumed sizes, not measured tokens. Suppose a classification prompt averages 800 input tokens and 40 output tokens: `345 × (800 × 0.15 + 40 × 0.60) / 1_000_000` is about $0.05. Suppose 250 of those are not noise and each embedding is 200 tokens: `250 × 200 × 0.02 / 1_000_000` is $0.001. Ten drafts at 1500 input tokens and 80 output tokens are under a cent. The illustration is about five cents for this window, on these assumptions. A pasted stack trace blows the input side up. A second classify of the same rows costs no model calls, because the bucket is already set. A second draft run still pays for up to ten calls, because draft text is not cached.
@@ -295,7 +309,8 @@ The honest way to replace the illustration is to read the usage object on the AP
 - The labels are a model's judgment. There is no hand-labeled set here, so there is no accuracy number. The ten-row table in the results file is a spot-check for a person, not a score.
 - Temperature 0 plus the cache makes reruns stable. It does not make the first label true, and it does not survive a prompt change. An edited comment body keeps the old label and the old vector, because re-ingest does not clear them. That is the reproducibility choice. It is the wrong choice if you needed the label to track the edit.
 - Greedy seeding is not transitive. If A is close to B and B is close to C, C joins only when C is also close to the seed. Id order decides which comment is the seed.
-- 0.82 will still glue short generic comments ("please add a test") into one cluster, and it will split two paraphrases that land at 0.80. It has not been tuned on this repo.
+- 0.6 will glue short generic comments that share a category and a directory. The first run's body-only vectors never reached 0.82 (maximum 0.772). The category and path prefix can pull different rules on one file together and push one rule across directories apart. The `similarity` object on the cluster response is how you check the cutoff on a given run. I have not measured the prefixed vectors.
+- Thread replies are not classified. A review whose root sits outside this window is excluded and does not become a rule. A suggestion the model still calls a typo stays noise and is not embedded.
 - Bots are excluded unless you opt in. A rule that only a bot mentioned will not become a draft. A rule mislabeled as noise is dropped before embedding, so it disappears.
 - The glob is a path prefix. It is not a language condition, and `**` means "I could not see a shared directory."
 - The assertion can still name an implementation if the model ignores the prompt. These rows are drafts. Nothing here promotes them to active Verify rules.
@@ -303,11 +318,15 @@ The honest way to replace the illustration is to read the usage object on the AP
 
 **11. Why is temperature 0 not enough on its own?**
 
-Temperature 0 stops sampling. It does not freeze the model. The guarantee you can demonstrate is the cache: classify a comment, run classify again, and the second call's `candidates` is 0 for that row because `bucket` is set. The unit test sets a bucket on a comment and asserts the fake model is not called for it. A prompt edit or a model rename should be treated as a new experiment, which means clearing the columns on purpose, not as something the cache will absorb. I would say that out loud so nobody thinks the stored label is a pure function of the comment text for all time.
+Temperature 0 stops sampling. It does not freeze the model. The guarantee you can demonstrate is the cache: classify a comment, run classify again, and the second call's `candidates` is 0 for that row because `bucket` is set. The unit test sets a bucket on a comment and asserts the fake model is not called for it. A prompt edit or a model rename should be treated as a new experiment, which means clearing the columns on purpose, not as something the cache will absorb. The thread migration is that clear: it nulls `bucket`, `category`, `reason`, and `embedding` once, because the prompt and the embedding text both changed. Ingest does not. I would say that out loud so nobody thinks the stored label is a pure function of the comment text for all time.
 
-**12. Why greedy clustering at 0.82 instead of k-means or asking the model which comments match?**
+**12. Why greedy clustering, and why is the default 0.6?**
 
-K-means needs you to pick k, and review comments do not arrive with a known number of rules. Asking the model to group them spends another pass and is harder to rerun exactly. Cosine against a seed is one comparison, the threshold is a number you can change, and id order makes it deterministic. 0.82 is the default in `DEFAULT_CLUSTER_THRESHOLD` and the value the pipeline sends. The test builds two vectors, measures their cosine, and checks that a threshold equal to that cosine keeps the pair, while a threshold 0.001 higher drops it. The same test drops a pair that shares a pull request. I would tune 0.82 by reading pairs near the boundary, as above, and I would not pretend the default is a fitted constant.
+K-means needs you to pick k, and review comments do not arrive with a known number of rules. Asking the model to group them spends another pass and is harder to rerun exactly. Cosine against a seed is one comparison, the threshold is a number you can change, and id order makes it deterministic.
+
+The first default was 0.82. I had not measured it. The first `aviator-co/av` run (`gpt-4o-mini` for labels, `text-embedding-3-small` for vectors) kept 0 clusters at 0.82. Across 169 non-noise comments the maximum pairwise cosine was 0.772 and the median was 0.266. One cross-PR pair scored at least 0.70, and six scored at least 0.60. 0.82 was above every pair, so it was an empty gate. The default is now 0.6, in `DEFAULT_CLUSTER_THRESHOLD`. The pipeline sends that unless `PIPELINE_THRESHOLD` is set.
+
+The test that builds two vectors and checks the boundary still uses a cosine of 0.82 as the threshold under test. That checks the comparison. A separate test expects the default to be 0.6. The same file drops a pair that shares a pull request. I would not call 0.6 fitted either. The next run's `similarity` counts are the numbers I would read before defending the cutoff again.
 
 **13. Five similar comments are all on one pull request. Why is there no invariant?**
 
@@ -319,5 +338,11 @@ The directory segments in common are just `pkg`. Both names end in `.go`. The fu
 
 **15. How do you estimate the OpenAI bill, and what would make that estimate a lie?**
 
-Count the calls, estimate tokens as characters divided by 4 plus the fixed prompt, and multiply by the published price for that model. Classification is one call per unlabeled comment. Embeddings are one batch per 64 non-noise comments that do not already have a vector. Drafts are at most ten calls, and they run again even when the labels were cached. Using the day-1 count of 345 human comments and the assumed token sizes in the section above lands near five cents at the 2026-10-11 list prices. That figure is a lie if you present it as the measured `aviator-co/av` bill, if the comments are much longer than the assumption, if the price page has changed, or if you forget that a second draft run pays again. The number I would stand behind is summed usage tokens times the price, after the real run.
+Count the calls, estimate tokens as characters divided by 4 plus the fixed prompt, and multiply by the published price for that model. Classification is one call per unlabeled top-level comment. Embeddings are one batch per 64 top-level non-noise comments that do not already have a vector. Drafts are at most ten calls, and they run again even when the labels were cached. Using the day-1 count of 345 human comments and the assumed token sizes in the section above lands near five cents at the 2026-10-11 list prices. The first classification run did see 345 human comments, replies included, so that multiplier matched the stored rows. It is still a lie if you present the five cents as the measured `aviator-co/av` bill, if the comments are much longer than the assumption, if the price page has changed, if you forget that replies are no longer classified, or if you forget that a second draft run pays again. The number I would stand behind is summed usage tokens times the price, after the real run.
+
+**16. Why are thread replies not classified, and why is a suggestion block not noise?**
+
+A reply is the conversation after the review, not a second review. GitHub sets `in_reply_to_id` on it. The first run ignored that field, so "already handled" became a noise comment and "`Close()` checks nil itself now" could be labeled deterministic. We store `in_reply_to_id`, classify only the roots, and pass the replies and the diff hunk in as context. Summary reports how many replies were excluded, as `repliesExcluded`. The bucket percentages use the top-level counts as the denominator. I do not have a measured reply count from the first run, because the column did not exist yet.
+
+A suggestion block is a proposed change. The first run labeled 22 of 30 human ones as noise, because the prompt allowed a nit and a question with no rule to swallow them. Noise is now only LGTM, thanks, acknowledgements, and pure typo fixes. Anything that says what the code should do is classified as the rule that implies: a linter, a test, or a judgment call. I have not remeasured that 22 after the prompt change.
 

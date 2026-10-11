@@ -9,7 +9,9 @@ import { findRepoOrThrow } from '../repos/find-repo';
 import { CommentLabel } from './labels';
 import { openAiModelName } from './model-name';
 import { OpenAiClassifier } from './openai-classifier';
+import { PromptReply } from './prompt';
 import { classifyConcurrency, mapWithConcurrency } from './pool';
+import { repliesFor } from './thread';
 
 export type ClassifyResult = {
   fullName: string;
@@ -21,6 +23,9 @@ export type ClassifyResult = {
   labeled: number;
   // Rows skipped because a bucket was already stored.
   alreadyLabeled: number;
+  // Thread replies matching the same bot filter. They are not review
+  // feedback, so they are not sent and they are not part of candidates.
+  skippedReplies: number;
   failed: number;
   firstError: string | null;
 };
@@ -38,18 +43,34 @@ export type ClassificationRow = {
   body: string;
 };
 
+type LoadedComment = {
+  id: bigint;
+  inReplyToId: bigint | null;
+  path: string | null;
+  body: string;
+  diffHunk: string | null;
+  author: string;
+  isBot: boolean;
+  bucket: string | null;
+  createdAt: Date;
+};
+
 type PendingComment = {
   id: bigint;
   path: string | null;
   body: string;
+  diffHunk: string | null;
+  replies: PromptReply[];
 };
 
 // The service asks this object to label one comment. Tests pass a fake.
-// The real one is OpenAiClassifier.
+// The real one is OpenAiClassifier. Replies and the diff hunk are context.
 export type CommentClassifier = {
   classify: (input: {
     path: string | null;
     body: string;
+    diffHunk: string | null;
+    replies: PromptReply[];
   }) => Promise<CommentLabel>;
 };
 
@@ -71,27 +92,48 @@ export class ClassifyService {
     const repo = await findRepoOrThrow(this.prisma, owner, repoName);
     const fullName = repo.fullName;
 
-    // bucket null is the cache. A row that already has a bucket is not
-    // selected, so a second call does not spend another model request on it.
-    // Re-ingest updates the body and leaves the bucket alone, which means an
-    // edited comment keeps the old label. That is the reproducibility trade.
-    const pending = await this.prisma.reviewComment.findMany({
-      where: {
-        repoId: repo.id,
-        bucket: null,
-        ...(includeBots ? {} : { isBot: false }),
+    // Load every comment on the repo. Replies, including bot replies, are
+    // context for the root even when includeBots is false. The bot filter
+    // applies to which roots we label, not to which replies we show.
+    //
+    // bucket null is the cache. A top-level row that already has a bucket
+    // is not sent again. Re-ingest updates the body and leaves the bucket
+    // alone, which means an edited comment keeps the old label.
+    const loaded = (await this.prisma.reviewComment.findMany({
+      where: { repoId: repo.id },
+      select: {
+        id: true,
+        inReplyToId: true,
+        path: true,
+        body: true,
+        diffHunk: true,
+        author: true,
+        isBot: true,
+        bucket: true,
+        createdAt: true,
       },
-      select: { id: true, path: true, body: true },
       orderBy: { id: 'asc' },
-    });
+    })) as LoadedComment[];
 
-    const alreadyLabeled = await this.prisma.reviewComment.count({
-      where: {
-        repoId: repo.id,
-        NOT: { bucket: null },
-        ...(includeBots ? {} : { isBot: false }),
-      },
-    });
+    const inScope = loaded.filter((row) => includeBots || !row.isBot);
+    // Null means "top of the thread". A set inReplyToId is a reply, even
+    // when the parent is outside this window.
+    const replies = inScope.filter((row) => isReply(row.inReplyToId));
+    const topLevel = inScope.filter((row) => !isReply(row.inReplyToId));
+    const alreadyLabeled = topLevel.filter((row) => row.bucket !== null).length;
+    const pending: PendingComment[] = topLevel
+      .filter((row) => row.bucket === null)
+      .sort((left, right) => compareId(left.id, right.id))
+      .map((row) => ({
+        id: row.id,
+        path: row.path,
+        body: row.body,
+        diffHunk: row.diffHunk,
+        replies: repliesFor(row.id, loaded).map((reply) => ({
+          author: reply.author,
+          body: reply.body,
+        })),
+      }));
 
     let labeled = 0;
     let failed = 0;
@@ -108,7 +150,7 @@ export class ClassifyService {
     });
 
     this.logger.log(
-      `${fullName}: labeled ${labeled}, already labeled ${alreadyLabeled}, failed ${failed}`,
+      `${fullName}: labeled ${labeled}, already labeled ${alreadyLabeled}, replies skipped ${replies.length}, failed ${failed}`,
     );
 
     if (failed > 0) {
@@ -124,6 +166,7 @@ export class ClassifyService {
       candidates: pending.length,
       labeled,
       alreadyLabeled,
+      skippedReplies: replies.length,
       failed,
       firstError,
     };
@@ -137,7 +180,7 @@ export class ClassifyService {
   ): Promise<{ fullName: string; comments: ClassificationRow[] }> {
     const repo = await findRepoOrThrow(this.prisma, owner, repoName);
     const rows = await this.prisma.reviewComment.findMany({
-      where: { repoId: repo.id, NOT: { bucket: null } },
+      where: { repoId: repo.id, inReplyToId: null, NOT: { bucket: null } },
       select: {
         id: true,
         prNumber: true,
@@ -178,6 +221,8 @@ export class ClassifyService {
       label = await this.classifier.classify({
         path: row.path,
         body: row.body,
+        diffHunk: row.diffHunk,
+        replies: row.replies,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -199,6 +244,16 @@ export class ClassifyService {
     });
     return { ok: true };
   }
+}
+
+function isReply(inReplyToId: bigint | null | undefined): boolean {
+  return typeof inReplyToId === 'bigint';
+}
+
+function compareId(left: bigint, right: bigint): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function readConcurrency(): number {

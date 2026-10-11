@@ -7,7 +7,7 @@ import {
   parseClassification,
 } from './labels';
 import { openAiModelName } from './model-name';
-import { CLASSIFY_SYSTEM_PROMPT, commentPrompt } from './prompt';
+import { CLASSIFY_SYSTEM_PROMPT, PromptReply, commentPrompt } from './prompt';
 import { retryOnRateLimit } from './rate-limit-retry';
 
 // The model sees this looser object. The 20-word cap is applied afterwards
@@ -35,6 +35,8 @@ export class OpenAiClassifier {
   async classify(input: {
     path: string | null;
     body: string;
+    diffHunk: string | null;
+    replies: PromptReply[];
   }): Promise<CommentLabel> {
     const structured = await this.ensureModel();
     // The client is constructed with maxRetries: 0, so a 429 is not swallowed

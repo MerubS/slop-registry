@@ -24,10 +24,17 @@ export type RepoSummary = {
   botShare: number;
   topBotLogins: AuthorCount[];
   topHumanAuthors: AuthorCount[];
-  // human ignores bots. all includes them. unlabeled means bucket is still null.
+  // Top-level comments only. A reply (inReplyToId set) is not review
+  // feedback, so it is not in these counts. unlabeled means bucket is null.
   buckets: {
     human: BucketCounts;
     all: BucketCounts;
+  };
+  // Replies left out of the bucket split. human ignores bots. all includes
+  // them. total, human, and bot above still count these rows.
+  repliesExcluded: {
+    human: number;
+    all: number;
   };
   invariants: InvariantView[];
 };
@@ -65,9 +72,22 @@ export class SummaryService {
     const total = human + bot;
     const bucketGroups = await this.prisma.reviewComment.groupBy({
       by: ['isBot', 'bucket'],
-      where: { repoId: repo.id },
+      where: { repoId: repo.id, inReplyToId: null },
       _count: { _all: true },
     });
+    const replyGroups = await this.prisma.reviewComment.groupBy({
+      by: ['isBot'],
+      where: { repoId: repo.id, NOT: { inReplyToId: null } },
+      _count: { _all: true },
+    });
+
+    let humanReplies = 0;
+    let allReplies = 0;
+    for (const group of replyGroups) {
+      const count = group._count._all;
+      allReplies += count;
+      if (!group.isBot) humanReplies += count;
+    }
 
     return {
       fullName,
@@ -84,6 +104,7 @@ export class SummaryService {
           count: group._count._all,
         })),
       ),
+      repliesExcluded: { human: humanReplies, all: allReplies },
       invariants: await loadInvariantViews(this.prisma, repo.id),
     };
   }

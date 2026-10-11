@@ -13,11 +13,15 @@ export function cosineSimilarity(left: number[], right: number[]): number {
   return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
 }
 
-// 0.82 is the starting gate. It is high on purpose: short comments that
-// merely share a mood ("please add a test") still join, but a comment
-// about SQL in a loop should not join a comment about a missing nil check
-// just because both are complaints. Tuning is described in the explainer.
-export const DEFAULT_CLUSTER_THRESHOLD = 0.82;
+// 0.6 is the default after the first aviator-co/av run. That run used 0.82
+// and kept zero clusters: across 169 non-noise comments the maximum
+// pairwise cosine was 0.772, so the gate sat above every pair. Six
+// cross-PR pairs scored at least 0.60 and one scored at least 0.70.
+// 0.6 is the cutoff that run still had a few recurring pairs at. It will
+// also join short comments that only share a phrase. The query parameter
+// overrides it, and the cluster response reports the distribution so the
+// next cutoff can be explained by that run. See the explainer.
+export const DEFAULT_CLUSTER_THRESHOLD = 0.6;
 
 export type ClusterItem = {
   id: bigint;

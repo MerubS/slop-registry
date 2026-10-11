@@ -46,6 +46,7 @@ type RepoSummary = {
   topBotLogins: AuthorCount[];
   topHumanAuthors: AuthorCount[];
   buckets?: { human: BucketCounts; all: BucketCounts };
+  repliesExcluded?: { human: number; all: number };
   invariants?: InvariantCard[];
 };
 
@@ -217,9 +218,24 @@ export default function HomePage() {
           </details>
 
           {summary.buckets && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <BucketTable title="Human comments by bucket" counts={summary.buckets.human} />
-              <BucketTable title="All comments by bucket" counts={summary.buckets.all} />
+            <div className="space-y-3">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <BucketTable
+                  title="Top-level human comments"
+                  counts={summary.buckets.human}
+                />
+                <BucketTable
+                  title="Top-level comments, bots included"
+                  counts={summary.buckets.all}
+                />
+              </div>
+              {summary.repliesExcluded && (
+                <p className="text-sm leading-relaxed text-[var(--muted)]">
+                  Bucket tables count top-level review comments. Thread replies excluded:{" "}
+                  {summary.repliesExcluded.human} human, {summary.repliesExcluded.all} including
+                  bots. Total, Human, and Bot above count every stored comment.
+                </p>
+              )}
             </div>
           )}
 

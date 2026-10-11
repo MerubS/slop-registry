@@ -21,8 +21,8 @@ function atDegrees(degrees: number): number[] {
 }
 
 describe('greedy clustering', () => {
-  it('uses 0.82 as the default threshold', () => {
-    expect(DEFAULT_CLUSTER_THRESHOLD).toBe(0.82);
+  it('uses 0.6 as the default threshold', () => {
+    expect(DEFAULT_CLUSTER_THRESHOLD).toBe(0.6);
   });
 
   it('keeps a pair at or above the threshold from two pull requests', () => {

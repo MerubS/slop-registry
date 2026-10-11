@@ -6,6 +6,8 @@ type Stored = {
   repoId: string;
   path: string | null;
   body: string;
+  diffHunk: string | null;
+  inReplyToId: bigint | null;
   isBot: boolean;
   bucket: string | null;
   category: string | null;
@@ -13,6 +15,7 @@ type Stored = {
   prNumber: number;
   author: string;
   htmlUrl: string;
+  createdAt: Date;
 };
 
 // Same idea as the ingest test: a Map stands in for Postgres. It is not a
@@ -101,6 +104,8 @@ function row(id: number, extra: Partial<Stored> = {}): Stored {
     repoId: 'repo_1',
     path: 'pkg/stack/stack.go',
     body: `comment ${id}`,
+    diffHunk: null,
+    inReplyToId: null,
     isBot: false,
     bucket: null,
     category: null,
@@ -108,6 +113,7 @@ function row(id: number, extra: Partial<Stored> = {}): Stored {
     prNumber: id,
     author: 'jainankit',
     htmlUrl: `https://github.com/aviator-co/av/pull/1#discussion_r${id}`,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
     ...extra,
   };
 }
@@ -183,5 +189,66 @@ describe('ClassifyService caching', () => {
     expect(included.labeled).toBe(1);
     expect(seen).toEqual(['comment 3']);
     expect(comments.get('3')?.bucket).toBe('noise');
+  });
+
+  it('does not classify a reply, and passes the reply plus the diff hunk to the root', async () => {
+    const { prisma, comments } = memoryPrisma();
+    comments.set(
+      '1',
+      row(1, { body: 'nil-check Close()', diffHunk: '@@\n-Close()' }),
+    );
+    comments.set(
+      '2',
+      row(2, {
+        body: 'Close() checks nil itself now',
+        inReplyToId: BigInt(1),
+        createdAt: new Date('2026-01-02T00:00:00Z'),
+      }),
+    );
+    comments.set(
+      '3',
+      row(3, {
+        body: 'already handled',
+        isBot: true,
+        author: 'coderabbitai[bot]',
+        inReplyToId: BigInt(1),
+        createdAt: new Date('2026-01-03T00:00:00Z'),
+      }),
+    );
+
+    const seen: Array<{
+      body: string;
+      diffHunk: string | null;
+      replies: Array<{ body: string }>;
+    }> = [];
+    const classifier: CommentClassifier = {
+      classify: (input) => {
+        seen.push(input);
+        return Promise.resolve({
+          bucket: 'deterministic',
+          category: 'functional_correctness',
+          reason: 'A nil check is a static rule.',
+        });
+      },
+    };
+
+    const service = new ClassifyService(
+      prisma as unknown as PrismaService,
+      classifier as unknown as ClassifyService['classifier'],
+    );
+
+    const result = await service.classify('aviator-co', 'av', false, 2);
+    expect(result.candidates).toBe(1);
+    expect(result.labeled).toBe(1);
+    expect(result.skippedReplies).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].body).toBe('nil-check Close()');
+    expect(seen[0].diffHunk).toBe('@@\n-Close()');
+    expect(seen[0].replies.map((reply) => reply.body)).toEqual([
+      'Close() checks nil itself now',
+      'already handled',
+    ]);
+    expect(comments.get('2')?.bucket).toBeNull();
+    expect(comments.get('3')?.bucket).toBeNull();
   });
 });

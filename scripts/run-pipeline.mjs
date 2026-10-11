@@ -9,7 +9,7 @@
 // Optional environment variables:
 //   API_URL              default http://127.0.0.1:43124
 //   PIPELINE_LIMIT       default 500
-//   PIPELINE_THRESHOLD   default 0.82
+//   PIPELINE_THRESHOLD   default 0.6
 //   PIPELINE_INCLUDE_BOTS  set to true to classify bot comments too
 
 import { writeFileSync } from 'node:fs';
@@ -147,7 +147,7 @@ function positiveInt(raw, fallback, name) {
 }
 
 function thresholdValue(raw) {
-  if (raw === undefined || raw === '') return '0.82';
+  if (raw === undefined || raw === '') return '0.6';
   if (!/^\d+(\.\d+)?$/.test(raw) || Number(raw) < 0 || Number(raw) > 1) {
     console.error(`PIPELINE_THRESHOLD must be a number from 0 to 1, got ${raw}`);
     process.exit(1);
@@ -234,35 +234,54 @@ function render(input) {
   lines.push('```');
   lines.push('');
 
+  const topLevelHuman =
+    input.humanBuckets.deterministic +
+    input.humanBuckets.execution_testable +
+    input.humanBuckets.judgment +
+    input.humanBuckets.noise +
+    input.humanBuckets.unlabeled;
+  const excluded = input.summaryBody.repliesExcluded;
+
   lines.push('## Human-only bucket split');
   lines.push('');
   lines.push(
-    "Ankit Jain's benchmark, from The New Stack on Sep 18, 2026, is 45% deterministic, 30% execution-testable, and 25% judgment. That split is three ways, so the benchmark column below uses human comments that are not noise as the denominator. Noise is its own row and is not forced into the 45/30/25.",
+    "Ankit Jain's benchmark, from The New Stack on Sep 18, 2026, is 45% deterministic, 30% execution-testable, and 25% judgment. That split is three ways, so the benchmark column below uses top-level human comments that are not noise as the denominator. Noise is its own row and is not forced into the 45/30/25. Thread replies are excluded from this split.",
   );
   lines.push('');
   lines.push(
-    `Human comments in this window: ${input.summaryBody.human}. Human comments excluding noise: ${input.humanNonNoise}. Unlabeled human comments: ${input.humanBuckets.unlabeled}.`,
+    `Stored human comments, including thread replies: ${input.summaryBody.human}. Top-level human comments in this split: ${topLevelHuman}. Of those, ${input.humanNonNoise} are not noise. Unlabeled top-level human comments: ${input.humanBuckets.unlabeled}.`,
   );
   lines.push('');
+  if (excluded) {
+    lines.push(
+      `Thread replies excluded from the bucket split: ${excluded.human} human, ${excluded.all} including bots. Classification skipped ${input.classifyBody.skippedReplies} replies under the same bot filter.`,
+    );
+  } else {
+    lines.push(
+      'The summary did not report repliesExcluded. Classification skipped ' +
+        `${input.classifyBody.skippedReplies} replies.`,
+    );
+  }
+  lines.push('');
   lines.push(
-    '| Bucket | Human count | Share of human comments | Share of human comments excluding noise | Ankit benchmark |',
+    '| Bucket | Human count | Share of top-level human comments | Share of top-level human comments excluding noise | Ankit benchmark |',
   );
   lines.push('| --- | ---: | ---: | ---: | ---: |');
-  lines.push(bucketRow('deterministic', input.humanBuckets, input.summaryBody.human, input.humanNonNoise, '45%'));
-  lines.push(bucketRow('execution_testable', input.humanBuckets, input.summaryBody.human, input.humanNonNoise, '30%'));
-  lines.push(bucketRow('judgment', input.humanBuckets, input.summaryBody.human, input.humanNonNoise, '25%'));
+  lines.push(bucketRow('deterministic', input.humanBuckets, topLevelHuman, input.humanNonNoise, '45%'));
+  lines.push(bucketRow('execution_testable', input.humanBuckets, topLevelHuman, input.humanNonNoise, '30%'));
+  lines.push(bucketRow('judgment', input.humanBuckets, topLevelHuman, input.humanNonNoise, '25%'));
   lines.push(
-    `| noise | ${input.humanBuckets.noise} | ${percent(input.humanBuckets.noise, input.summaryBody.human)} | reported separately | not part of the 45/30/25 split |`,
+    `| noise | ${input.humanBuckets.noise} | ${percent(input.humanBuckets.noise, topLevelHuman)} | reported separately | not part of the 45/30/25 split |`,
   );
   lines.push(
-    `| unlabeled | ${input.humanBuckets.unlabeled} | ${percent(input.humanBuckets.unlabeled, input.summaryBody.human)} | not classified |  |`,
+    `| unlabeled | ${input.humanBuckets.unlabeled} | ${percent(input.humanBuckets.unlabeled, topLevelHuman)} | not classified |  |`,
   );
   lines.push('');
 
-  lines.push('## All comments, including bots');
+  lines.push('## All top-level comments, including bots');
   lines.push('');
   lines.push(
-    `Total ${input.summaryBody.total}, human ${input.summaryBody.human}, bot ${input.summaryBody.bot}, bot share ${input.summaryBody.botShare}.`,
+    `Stored total ${input.summaryBody.total}, human ${input.summaryBody.human}, bot ${input.summaryBody.bot}, bot share ${input.summaryBody.botShare}. The table below is top-level comments only.`,
   );
   lines.push('');
   lines.push('| Bucket | Count |');
@@ -275,8 +294,10 @@ function render(input) {
   lines.push('## Clusters');
   lines.push('');
   lines.push(
-    `Threshold ${input.clusterBody.threshold}. Comments considered (non-noise, with an embedding): ${input.clusterBody.commentsConsidered}. Embedded on this run: ${input.clusterBody.embeddedThisRun}. Already embedded before this run: ${input.clusterBody.alreadyEmbedded}. Clusters kept (2 or more comments from 2 or more pull requests): **${input.clusterBody.clusterCount}**.`,
+    `Threshold ${input.clusterBody.threshold}. Comments considered (top-level, non-noise, with an embedding): ${input.clusterBody.commentsConsidered}. Embedded on this run: ${input.clusterBody.embeddedThisRun}. Already embedded before this run: ${input.clusterBody.alreadyEmbedded}. Clusters kept (2 or more comments from 2 or more pull requests): **${input.clusterBody.clusterCount}**.`,
   );
+  lines.push('');
+  lines.push(similarityLines(input.clusterBody.similarity));
   lines.push('');
   lines.push('```json');
   lines.push(JSON.stringify(input.clusterBody, null, 2));
@@ -348,6 +369,17 @@ function render(input) {
   lines.push('```');
   lines.push('');
   return lines.join('\n');
+}
+
+function similarityLines(similarity) {
+  if (!similarity) return 'The cluster response did not include a similarity distribution.';
+  const max = similarity.max === null || similarity.max === undefined ? 'n/a' : similarity.max;
+  const median =
+    similarity.median === null || similarity.median === undefined ? 'n/a' : similarity.median;
+  const counts = (similarity.crossPrPairsAtOrAbove || [])
+    .map((row) => `${row.count} at or above ${row.threshold}`)
+    .join(', ');
+  return `Pairwise cosine over ${similarity.pairCount} pairs (same pull request included): max ${max}, median ${median}. Cross-PR pairs: ${counts}.`;
 }
 
 function bucketRow(name, buckets, humanTotal, nonNoise, benchmark) {

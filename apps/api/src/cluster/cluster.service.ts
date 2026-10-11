@@ -8,6 +8,7 @@ import {
   greedyClusters,
 } from './greedy-cluster';
 import { OpenAiEmbedder } from './openai-embedder';
+import { SimilarityDistribution, similarityDistribution } from './similarity';
 import { textToEmbed } from './text-to-embed';
 import {
   EMBEDDING_DIMENSIONS,
@@ -32,6 +33,9 @@ export type ClusterResult = {
   skippedEmptyBody: number;
   commentsConsidered: number;
   clusterCount: number;
+  // Pairwise cosine of the comments considered, so the threshold can be
+  // compared with this run instead of with a number chosen in advance.
+  similarity: SimilarityDistribution;
   clusters: ClusterSummary[];
 };
 
@@ -43,10 +47,16 @@ export type PreparedClusters = {
   alreadyEmbedded: number;
   skippedEmptyBody: number;
   commentsConsidered: number;
+  similarity: SimilarityDistribution;
   clusters: CommentCluster[];
 };
 
-type PendingRow = { id: bigint; body: string };
+type PendingRow = {
+  id: bigint;
+  body: string;
+  category: string | null;
+  path: string | null;
+};
 type EmbeddedRow = {
   id: bigint;
   prNumber: number;
@@ -78,6 +88,7 @@ export class ClusterService {
       skippedEmptyBody: prepared.skippedEmptyBody,
       commentsConsidered: prepared.commentsConsidered,
       clusterCount: prepared.clusters.length,
+      similarity: prepared.similarity,
       clusters: prepared.clusters.map((cluster) => ({
         size: cluster.size,
         prCount: cluster.prCount,
@@ -102,6 +113,7 @@ export class ClusterService {
       SELECT id, "prNumber", path, embedding::text AS embedding
       FROM "ReviewComment"
       WHERE "repoId" = ${repo.id}
+        AND "inReplyToId" IS NULL
         AND bucket IS NOT NULL
         AND bucket <> 'noise'
         AND embedding IS NOT NULL
@@ -136,8 +148,9 @@ export class ClusterService {
     }
 
     const clusters = greedyClusters(items, threshold);
+    const similarity = similarityDistribution(items);
     this.logger.log(
-      `${repo.fullName}: embedded ${embedded.embeddedThisRun} this run, ${clusters.length} clusters at ${threshold}`,
+      `${repo.fullName}: embedded ${embedded.embeddedThisRun} this run, ${clusters.length} clusters at ${threshold}, max cosine ${similarity.max}`,
     );
 
     return {
@@ -148,6 +161,7 @@ export class ClusterService {
       alreadyEmbedded,
       skippedEmptyBody: embedded.skippedEmptyBody,
       commentsConsidered: items.length,
+      similarity,
       clusters,
     };
   }
@@ -157,6 +171,7 @@ export class ClusterService {
       SELECT COUNT(*)::int AS count
       FROM "ReviewComment"
       WHERE "repoId" = ${repoId}
+        AND "inReplyToId" IS NULL
         AND bucket IS NOT NULL
         AND bucket <> 'noise'
         AND embedding IS NOT NULL
@@ -171,9 +186,10 @@ export class ClusterService {
     skippedEmptyBody: number;
   }> {
     const pending = await this.prisma.$queryRaw<PendingRow[]>`
-      SELECT id, body
+      SELECT id, body, category, path
       FROM "ReviewComment"
       WHERE "repoId" = ${repoId}
+        AND "inReplyToId" IS NULL
         AND bucket IS NOT NULL
         AND bucket <> 'noise'
         AND embedding IS NULL
@@ -183,7 +199,11 @@ export class ClusterService {
     const ready: Array<{ id: bigint; text: string }> = [];
     let skippedEmptyBody = 0;
     for (const row of pending) {
-      const text = textToEmbed(row.body);
+      const text = textToEmbed({
+        body: row.body,
+        category: row.category,
+        path: row.path,
+      });
       if (!text) {
         skippedEmptyBody += 1;
         continue;
