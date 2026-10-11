@@ -1,6 +1,7 @@
-// Day 1 stores review comments. bucket, category, reason, and embedding
-// stay empty until classification and clustering. They are on the model
-// now so a later migration does not rewrite a table we have already filled.
+// Day 1 stores review comments. Day 2 fills bucket, category, reason,
+// and embedding. inReplyToId and diffHunk were added after the first
+// aviator-co/av run, in the comment_threads migration. That migration
+// also clears the first-run labels and embeddings once.
 
 generator client {
   provider        = "prisma-client-js"
@@ -40,17 +41,29 @@ model ReviewComment {
   htmlUrl   String
   createdAt DateTime
 
-  // Filled in later by classification. Null means "not classified".
-  // Re-ingest must not overwrite these. The upsert update clause omits them.
+  // GitHub's in_reply_to_id. Null means this comment starts the thread,
+  // which is the review we classify. A reply points at its parent. Replies
+  // are context for that root. They are not classified or clustered, and
+  // they are left out of the bucket split.
+  inReplyToId BigInt?
+
+  // The diff the comment is attached to. Classify passes the hunk with
+  // the thread. The embedding may include a short excerpt of the changed
+  // lines, never the path. The path is only for the file glob.
+  diffHunk String? @db.Text
+
+  // Null bucket means "not classified". Classify skips a row that already
+  // has one. Re-ingest must not overwrite these. The upsert update clause
+  // omits them, so an edited body keeps the old label.
   bucket   String?
   category String?
   reason   String?
 
-  // 1536 is the default size of OpenAI text-embedding-3-small, which the
-  // clustering step will use. Prisma has no vector type, so this column is
-  // Unsupported: the database has it, the Prisma client cannot read or
-  // write it. Clustering will use SQL. Select a specific field list on
-  // writes so Prisma does not try to return this column.
+  // 1536 is the default size of OpenAI text-embedding-3-small. Prisma has
+  // no vector type, so this column is Unsupported: the database has it,
+  // the Prisma client cannot read or write it. ClusterService writes it
+  // with SQL. Select a specific field list on Prisma writes so Prisma
+  // does not try to return this column.
   embedding Unsupported("vector(1536)")?
 
   @@index([repoId])
@@ -64,7 +77,13 @@ model Invariant {
   assertion        String
   category         String?
   fileGlob         String?
+  // Supporting comments that state the rule, not the raw cluster size.
+  // supportCount is the same number under an honest name.
   clusterSize      Int      @default(0)
+  supportCount     Int      @default(0)
+  // Distinct pull requests among those supporting comments. This is the
+  // "seen in N pull requests" figure. It is not the raw cluster's PR count.
+  prCount          Int      @default(0)
   sourceCommentIds BigInt[] @default([])
   createdAt        DateTime @default(now())
 }

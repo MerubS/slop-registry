@@ -18,6 +18,7 @@ function memoryPrisma() {
     }
   >();
   const updateKeys: string[][] = [];
+  const createKeys: string[][] = [];
 
   const prisma = {
     repo: {
@@ -46,6 +47,7 @@ function memoryPrisma() {
         update: Record<string, unknown>;
       }) => {
         updateKeys.push(Object.keys(update));
+        createKeys.push(Object.keys(create));
         const key = where.id.toString();
         const existing = comments.get(key);
         if (existing) {
@@ -77,7 +79,7 @@ function memoryPrisma() {
     $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
   };
 
-  return { prisma, comments, updateKeys };
+  return { prisma, comments, updateKeys, createKeys };
 }
 
 function comment(id: number, body = `comment ${id}`): GithubReviewComment {
@@ -97,7 +99,7 @@ function comment(id: number, body = `comment ${id}`): GithubReviewComment {
 
 describe('IngestService idempotency', () => {
   it('ingesting the same comments twice keeps the same count', async () => {
-    const { prisma, updateKeys } = memoryPrisma();
+    const { prisma, updateKeys, createKeys } = memoryPrisma();
     const pages = [comment(1), comment(2), comment(3)];
     const github = {
       fetchReviewComments: () => pages,
@@ -125,6 +127,13 @@ describe('IngestService idempotency', () => {
       expect(keys).not.toContain('category');
       expect(keys).not.toContain('reason');
       expect(keys).not.toContain('embedding');
+      expect(keys).toContain('inReplyToId');
+      expect(keys).toContain('diffHunk');
+    }
+    for (const keys of createKeys) {
+      expect(keys).toContain('inReplyToId');
+      expect(keys).toContain('diffHunk');
+      expect(keys).not.toContain('bucket');
     }
   });
 

@@ -1,5 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
-import { assertRepoName, parseLimit } from './repo-params';
+import {
+  assertRepoName,
+  parseIncludeBots,
+  parseLimit,
+  parseThreshold,
+} from './repo-params';
 
 describe('parseLimit', () => {
   it('defaults to 500', () => {
@@ -30,5 +35,26 @@ describe('assertRepoName', () => {
   it('rejects slashes and spaces', () => {
     expect(() => assertRepoName('a/b', 'c')).toThrow(BadRequestException);
     expect(() => assertRepoName('a', 'c d')).toThrow(BadRequestException);
+  });
+});
+
+describe('parseIncludeBots', () => {
+  it('defaults to human comments only', () => {
+    expect(parseIncludeBots(undefined)).toBe(false);
+    expect(parseIncludeBots('')).toBe(false);
+    expect(parseIncludeBots('false')).toBe(false);
+    expect(parseIncludeBots('true')).toBe(true);
+    expect(parseIncludeBots('1')).toBe(true);
+  });
+});
+
+describe('parseThreshold', () => {
+  it('defaults to 0.6 and accepts a number from 0 to 1', () => {
+    expect(parseThreshold(undefined)).toBe(0.6);
+    expect(parseThreshold('0.82')).toBe(0.82);
+    expect(parseThreshold('0')).toBe(0);
+    expect(parseThreshold('1')).toBe(1);
+    expect(() => parseThreshold('1.1')).toThrow(BadRequestException);
+    expect(() => parseThreshold('high')).toThrow(BadRequestException);
   });
 });

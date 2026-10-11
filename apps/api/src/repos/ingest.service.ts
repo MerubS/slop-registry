@@ -91,10 +91,14 @@ export class IngestService {
               body: row.body,
               htmlUrl: row.htmlUrl,
               createdAt: row.createdAt,
+              inReplyToId: row.inReplyToId,
+              diffHunk: row.diffHunk,
             },
             // bucket, category, reason, and embedding are left out on
             // purpose. A later classifier will fill them, and a re-ingest
             // must not wipe that work when the comment body is refreshed.
+            // inReplyToId and diffHunk are refreshed: they come from GitHub,
+            // and a row ingested before the thread columns existed needs them.
             update: {
               repoId: row.repoId,
               prNumber: row.prNumber,
@@ -104,6 +108,8 @@ export class IngestService {
               body: row.body,
               htmlUrl: row.htmlUrl,
               createdAt: row.createdAt,
+              inReplyToId: row.inReplyToId,
+              diffHunk: row.diffHunk,
             },
           }),
         ),

@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { DEFAULT_CLUSTER_THRESHOLD } from '../cluster/complete-linkage';
 
 // GitHub owner and repo names are letters, numbers, dots, underscores, hyphens.
 // Rejecting anything else keeps a bad param out of the URL we send GitHub.
@@ -27,4 +28,32 @@ export function parseLimit(raw: string | string[] | undefined): number {
     throw new BadRequestException('limit must be between 1 and 2000');
   }
   return limit;
+}
+
+export function parseIncludeBots(raw: string | string[] | undefined): boolean {
+  if (Array.isArray(raw)) {
+    throw new BadRequestException('includeBots must be true or false');
+  }
+  if (raw === undefined || raw === '' || raw === 'false' || raw === '0') {
+    return false;
+  }
+  if (raw === 'true' || raw === '1') return true;
+  throw new BadRequestException('includeBots must be true or false');
+}
+
+export function parseThreshold(raw: string | string[] | undefined): number {
+  if (Array.isArray(raw)) {
+    throw new BadRequestException(
+      'threshold must be a single number from 0 to 1',
+    );
+  }
+  if (raw === undefined || raw === '') return DEFAULT_CLUSTER_THRESHOLD;
+  if (!/^\d+(\.\d+)?$/.test(raw)) {
+    throw new BadRequestException('threshold must be a number from 0 to 1');
+  }
+  const threshold = Number(raw);
+  if (threshold < 0 || threshold > 1) {
+    throw new BadRequestException('threshold must be a number from 0 to 1');
+  }
+  return threshold;
 }

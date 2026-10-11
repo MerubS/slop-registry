@@ -1,6 +1,7 @@
-// Fields we actually read from GitHub's "list review comments in a repository"
-// response. The payload has more keys (diff hunk, reactions, line numbers).
-// Leaving them off this type makes it obvious we do not store them.
+// Fields we read from GitHub's "list review comments in a repository"
+// response. in_reply_to_id is how a thread reply points at its parent.
+// diff_hunk is the code the comment sits on. Both are stored. Reactions
+// and line numbers are not.
 export type GithubReviewComment = {
   id: number;
   user: { login?: string | null; type?: string | null } | null;
@@ -9,6 +10,8 @@ export type GithubReviewComment = {
   html_url?: string | null;
   created_at?: string | null;
   pull_request_url?: string | null;
+  in_reply_to_id?: number | null;
+  diff_hunk?: string | null;
 };
 
 export type CommentWrite = {
@@ -21,4 +24,6 @@ export type CommentWrite = {
   body: string;
   htmlUrl: string;
   createdAt: Date;
+  inReplyToId: bigint | null;
+  diffHunk: string | null;
 };

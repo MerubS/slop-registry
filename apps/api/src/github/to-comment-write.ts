@@ -35,5 +35,17 @@ export function toCommentWrite(
     body: raw.body ?? '',
     htmlUrl: raw.html_url,
     createdAt,
+    inReplyToId: parseInReplyToId(raw.in_reply_to_id),
+    // Keep the hunk's own whitespace. Only a blank hunk is dropped.
+    diffHunk: raw.diff_hunk?.trim() ? raw.diff_hunk : null,
   };
+}
+
+// A missing or non-positive id means "this comment starts the thread".
+// GitHub uses null for that. Zero and garbage must not become a parent id.
+function parseInReplyToId(raw: number | null | undefined): bigint | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+    return null;
+  }
+  return BigInt(Math.trunc(raw));
 }
