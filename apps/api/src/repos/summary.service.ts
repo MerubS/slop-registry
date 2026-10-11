@@ -1,5 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import {
+  InvariantView,
+  loadInvariantViews,
+} from '../invariants/load-invariants';
 import { PrismaService } from '../prisma/prisma.service';
+import { BucketCounts, bucketCountsFromGroups } from './bucket-counts';
+import { findRepoOrThrow } from './find-repo';
 
 // Enough to see who dominates the window. The page does not need every login.
 const TOP_N = 10;
@@ -18,6 +24,12 @@ export type RepoSummary = {
   botShare: number;
   topBotLogins: AuthorCount[];
   topHumanAuthors: AuthorCount[];
+  // human ignores bots. all includes them. unlabeled means bucket is still null.
+  buckets: {
+    human: BucketCounts;
+    all: BucketCounts;
+  };
+  invariants: InvariantView[];
 };
 
 @Injectable()
@@ -25,13 +37,8 @@ export class SummaryService {
   constructor(private readonly prisma: PrismaService) {}
 
   async summarize(owner: string, repoName: string): Promise<RepoSummary> {
-    const fullName = `${owner}/${repoName}`;
-    const repo = await this.prisma.repo.findUnique({ where: { fullName } });
-    if (!repo) {
-      throw new NotFoundException(
-        `No ingest stored for ${fullName}. POST /repos/${owner}/${repoName}/ingest first.`,
-      );
-    }
+    const repo = await findRepoOrThrow(this.prisma, owner, repoName);
+    const fullName = repo.fullName;
 
     const groups = await this.prisma.reviewComment.groupBy({
       by: ['isBot', 'author'],
@@ -56,6 +63,11 @@ export class SummaryService {
     }
 
     const total = human + bot;
+    const bucketGroups = await this.prisma.reviewComment.groupBy({
+      by: ['isBot', 'bucket'],
+      where: { repoId: repo.id },
+      _count: { _all: true },
+    });
 
     return {
       fullName,
@@ -65,6 +77,14 @@ export class SummaryService {
       botShare: total === 0 ? 0 : Math.round((bot / total) * 10000) / 10000,
       topBotLogins: topN(bots),
       topHumanAuthors: topN(humans),
+      buckets: bucketCountsFromGroups(
+        bucketGroups.map((group) => ({
+          isBot: group.isBot,
+          bucket: group.bucket,
+          count: group._count._all,
+        })),
+      ),
+      invariants: await loadInvariantViews(this.prisma, repo.id),
     };
   }
 }

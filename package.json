@@ -3,13 +3,16 @@
   "private": true,
   "packageManager": "pnpm@10.33.4",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "pnpm --parallel --filter web --filter api dev",
     "dev:web": "pnpm --filter web dev",
     "dev:api": "pnpm --filter api dev",
     "test": "pnpm --filter api test",
+    "lint": "pnpm --filter api exec eslint \"{src,apps,libs,test}/**/*.ts\" && pnpm --filter web lint",
+    "build": "pnpm --filter api build && pnpm --filter web build",
+    "run:pipeline": "node scripts/run-pipeline.mjs",
     "db:up": "docker compose up -d",
     "db:migrate": "pnpm --filter api exec prisma migrate deploy",
     "db:generate": "pnpm --filter api exec prisma generate"
